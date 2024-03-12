@@ -110,6 +110,37 @@ def sample_sequence(
     return generated_sequence
 
 
+def self_distillaion_loss(logits, target, temperature=2, alpha=0.5):
+    """
+    Compute the overall loss for the self-distillation process.
+
+    Parameters:
+    - logits: The predicted logits from the different layers of the model
+    - target_logits: The predicted logits from the teacher model
+    - temperature: The temperature parameter used to scale the logits before computing the loss
+    - alpha: The weight of the distillation loss in the final loss
+
+    Returns:
+    - The distillation loss
+    """
+    sum_cross_entropy_loss = 0
+    sum_kl_divergence_loss = 0
+    for i in range(len(logits) - 1):
+        # Compute the KL divergence between the layer_i and the layer i+1 predictions
+        p = F.log_softmax(logits[i] / temperature, dim=1)
+        q = F.softmax(logits[i + 1] / temperature, dim=1)
+        kl_divergence_loss = F.kl_div(p, q, reduction="batchmean")
+        # Compute the cross-entropy loss between the layer_i prediction and the target
+        cross_entropy_loss = F.cross_entropy(logits[i] / temperature, target, reduction="mean")
+
+        sum_cross_entropy_loss += cross_entropy_loss
+        sum_kl_divergence_loss += kl_divergence_loss
+    
+    # Compute the final distillation loss as a weighted sum of the cross-entropy and KL divergence losses
+    distillation_loss = (1 - alpha) * sum_cross_entropy_loss + alpha * sum_kl_divergence_loss
+    return distillation_loss
+
+
 def go(arg):
     """
     Main training and generation loop.

@@ -11,7 +11,7 @@ class GTransformer(nn.Module):
     Transformer for generating text (character by character).
     """
 
-    def __init__(self, emb, heads, depth, seq_length, num_tokens, attention_type='default'):
+    def __init__(self, emb, heads, depth, seq_length, num_tokens, attention_type='default', split_size=4):
 
         super().__init__()
 
@@ -19,15 +19,13 @@ class GTransformer(nn.Module):
         self.token_embedding = nn.Embedding(embedding_dim=emb, num_embeddings=num_tokens)
         self.pos_embedding = nn.Embedding(embedding_dim=emb, num_embeddings=(seq_length * 2 - 1 if attention_type=='relative' else seq_length))
 
-
         tblocks = []
-        for i in range(depth):
+        for _ in range(depth // split_size):
             tblocks.append(
                 TransformerBlock(emb=emb, heads=heads, seq_length=seq_length, mask=True, attention_type=attention_type, pos_embedding=self.pos_embedding))
-
-        self.tblocks = nn.Sequential(*tblocks)
-
-        self.toprobs = nn.Linear(emb, num_tokens)
+            
+        self.layers = nn.ModuleList([nn.Sequential(*tblocks) for _ in range(split_size)])
+        self.toprobs = nn.ModuleList([nn.Linear(emb, num_tokens) for _ in range(split_size)])
 
     def forward(self, x):
         """
@@ -40,63 +38,11 @@ class GTransformer(nn.Module):
         positions = self.pos_embedding(torch.arange(t, device=d()))[None, :, :].expand(b, t, e)
         x = tokens + positions
 
-        x = self.tblocks(x)
+        out = []
+        for i in range(len(self.layers)):
+            x = self.layers[i](x)
+            layer_logits = self.toprobs[i](x.view(b*t, e)).view(b, t, self.num_tokens)
+            out.append(layer_logits)
 
-        x = self.toprobs(x.view(b*t, e)).view(b, t, self.num_tokens)
-
-        return F.log_softmax(x, dim=2)
-
-class CTransformer(nn.Module):
-    """
-    Transformer for classifying sequences
-    """
-
-    def __init__(self, emb, heads, depth, seq_length, num_tokens, num_classes, max_pool=True, dropout=0.0, wide=False):
-        """
-        :param emb: Embedding dimension
-        :param heads: nr. of attention heads
-        :param depth: Number of transformer blocks
-        :param seq_length: Expected maximum sequence length
-        :param num_tokens: Number of tokens (usually words) in the vocabulary
-        :param num_classes: Number of classes.
-        :param max_pool: If true, use global max pooling in the last layer. If false, use global
-                         average pooling.
-        """
-        super().__init__()
-
-        self.num_tokens, self.max_pool = num_tokens, max_pool
-
-        self.token_embedding = nn.Embedding(embedding_dim=emb, num_embeddings=num_tokens)
-        self.pos_embedding = nn.Embedding(embedding_dim=emb, num_embeddings=seq_length)
-
-        tblocks = []
-        for i in range(depth):
-            tblocks.append(
-                TransformerBlock(emb=emb, heads=heads, seq_length=seq_length, mask=False, dropout=dropout))
-
-        self.tblocks = nn.Sequential(*tblocks)
-
-        self.toprobs = nn.Linear(emb, num_classes)
-
-        self.do = nn.Dropout(dropout)
-
-    def forward(self, x):
-        """
-        :param x: A batch by sequence length integer tensor of token indices.
-        :return: predicted log-probability vectors for each token based on the preceding tokens.
-        """
-        tokens = self.token_embedding(x)
-        b, t, e = tokens.size()
-
-        positions = self.pos_embedding(torch.arange(t, device=d()))[None, :, :].expand(b, t, e)
-        x = tokens + positions
-        x = self.do(x)
-
-        x = self.tblocks(x)
-
-        x = x.max(dim=1)[0] if self.max_pool else x.mean(dim=1) # pool over the time dimension
-
-        x = self.toprobs(x)
-
-        return F.log_softmax(x, dim=1)
+        return tuple(out)
 
