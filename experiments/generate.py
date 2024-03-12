@@ -140,7 +140,6 @@ def self_distillaion_loss(logits, target, temperature=2, alpha=0.5):
     distillation_loss = (1 - alpha) * sum_cross_entropy_loss + alpha * sum_kl_divergence_loss
     return distillation_loss
 
-
 def go(arg):
     """
     Main training and generation loop.
@@ -190,7 +189,7 @@ def go(arg):
         output = model(source)
         t = toc()
 
-        loss = F.nll_loss(output.transpose(2, 1), target, reduction="mean")
+        loss = self_distillaion_loss(output, target, temperature=2, alpha=0.5)
         tbw.add_scalar(
             "transformer/train-loss",
             float(loss.item()) * util.LOG2E,
